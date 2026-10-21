@@ -11,7 +11,7 @@ test_sh_quote_empty := assert m.sh_quote("") = "''"
 
 test_sh_quote_spaces := assert m.sh_quote("a b c") = "'a b c'"
 
-test_sh_quote_embedded := assert m.sh_quote("it's") = "'it'\\''s'"
+test_sh_quote_embedded := assert m.sh_quote("it's") = "'it''\\'s'"
 
 test_sh_quote_injection := assert m.sh_quote("x; rm -rf /") = "'x; rm -rf /'"
 

@@ -91,7 +91,7 @@ emit_spec := (acc, spec, opts) ~> do {
     if spec.kind == "flag" {
       if v { [...acc, spec.flag] } else { acc }
     } else if spec.kind == "strings" {
-      if type.is_array(v) {
+      if type.of(v) == "array" {
         do {
           out := acc
           for x in v { do {
