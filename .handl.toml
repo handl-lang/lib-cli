@@ -1,0 +1,14 @@
+# handl manifest for the `lib-cli` repo: the `cli` spawn contract (port)
+# plus `cli-c`, its libc backend. One repo ships both modules
+# (`modules: ["cli", "cli-c"]` in pkg.hnl → src/<name>/index.hnl).
+#
+# `cli-c` calls `ffi.call("libc.so.6", ...)` directly, so no libc/libc-*
+# package dep is declared; `result`/`str`/`bytes`/`type`/`tag`/
+# `hash_map`/`math`/`error`/`ffi` resolve through the host module chain.
+
+[dependencies]
+# own modules — the self-referential rows keep name-specs resolving when
+# a dependent repo's modules are loaded under this manifest's context
+# (same convention as lib-tensor/lib-str-c).
+cli   = { path = "src/cli" }
+cli-c = { path = "src/cli-c" }

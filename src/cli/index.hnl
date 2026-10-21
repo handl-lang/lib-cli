@@ -1,0 +1,92 @@
+--- cli -- child-process spawn contract (port package).
+---
+--- `cli` is the *port*: it declares the types and arrow signatures every
+--- CLI-process backend implements. `cli-c` (the sibling module in this
+--- repo) is the reference backend over libc — `posix_spawnp` on `sh -c`
+--- with stdout/stderr captured through inherited tmpfile fds.
+---
+--- Surface:
+---   run(argv)                                  -- spawn argv[0] via PATH,
+---                                                 capture stdio + code
+---   shell(cmdline)                             -- a raw `sh -c` line
+---                                                 (caller-trusted input)
+---   argv(prog, subpath, positionals, flag_specs, opts, rest)
+---                                              -- pure argv assembly
+---   sh_quote(s)                                -- pure POSIX single-quote
+---                                                 escaper
+---
+--- `run`/`shell` return `Result<Output, Spawn>`: `ok` carries a finished
+--- child's `{ code, stdout, stderr }`; `err` carries a spawn-time failure
+--- `{ code, message }` where `code` is the C errno. The child's own exit
+--- status is never an `err` — it lands in `Output.code` (a signal death
+--- is reported as `128 + signo`, the shell convention).
+---
+--- `~[1]~>` marks `run`/`shell` effectful: every backend reaches the OS
+--- process interface through `ffi.call` (or the host equivalent).
+--- `argv`/`sh_quote` are pure so the argv shape is testable without a
+--- process table.
+
+from "result" import { Result }
+from "type" import { Int, String, Obj, Value }
+
+--- A finished child: exit `code` plus the captured streams decoded as
+--- UTF-8. `code` is the wait status decoded the POSIX way — the exit
+--- status when the child exited, `128 + signo` on signal death.
+export Output := { code: Int, stdout: String, stderr: String }
+
+--- A spawn-time failure: `code` is the C `errno` of the failing call
+--- (`tmpfile`/`fileno`/`posix_spawnp`/`waitpid`), `message` names the
+--- call and the `strerror` text when available.
+export Spawn := { code: Int, message: String }
+
+--- One command-line option spec for `argv`. `name` is the key looked up
+--- in the `opts` record; `flag` is the literal argv word emitted when the
+--- option is present; `kind` selects the emission shape:
+---
+---   "flag"    -- Boolean; emits `flag` iff the value is truthy
+---   "string"  -- emits `flag <value>` (value stringified)
+---   "int"     -- emits `flag <value>` (value stringified)
+---   "strings" -- value is a list; emits `flag <v>` once per element
+---
+--- The `kind` spellings match the `opt:<kind>:<name>:<flag>` arg
+--- descriptors the sdkgen-cli emitter produces (`opt:string:title:--title`
+--- lowers to `{ name: "title", flag: "--title", kind: "string" }`).
+export FlagSpec := { name: String, flag: String, kind: String }
+
+--- Spawn `argv[0]` (PATH lookup) with the rest as arguments, wait for
+--- the child, and capture both streams. The argv array is literal — no
+--- shell quoting happens, so elements containing spaces stay one word.
+export Run := ([String]) ~[1]~> Result<Output, Spawn>
+
+--- Pure argv assembly:
+---
+---   argv(prog, subpath, positionals, flag_specs, opts, rest)
+---
+--- emits `[prog] ++ subpath ++ positionals ++ flags ++ rest` with every
+--- element stringified (`type.to_string`, so Int/Bool positionals and
+--- option values are safe). `subpath` is the command path after the
+--- program word (e.g. `["pr", "create"]` for `gh pr create`); `opts` is
+--- an `Obj` record (or `null`) expanded against `flag_specs`; `rest` is
+--- the variadic tail appended verbatim.
+export Argv := (String, [String], [Value], [FlagSpec], Obj, [Value]) ~> [String]
+
+--- POSIX single-quote escaping: wraps `s` in `'` and replaces each inner
+--- `'` with `'\''`, so the result is one argv word under POSIX shell
+--- tokenization for any input. Pure — the backend composes it to build
+--- the `sh -c` line `run` executes.
+export ShQuote := (String) ~> String
+
+--- Run a raw `sh -c` command line — no quoting, full shell syntax
+--- (pipes, redirections, `&&`). The input is caller-trusted: never pass
+--- untrusted text (use `run` + `argv`/`sh_quote` for that).
+export Shell := (String) ~[1]~> Result<Output, Spawn>
+
+--- `argv` always emits `prog` as argv[0]: the builder followed by a
+--- `[0]` projection is the same arrow as the first projection of its
+--- inputs. Quantified over the `Argv` signature so any conforming
+--- backend can be checked against it.
+export argv_head := (argv: Argv) ~>
+  (prog, subpath, positionals, flag_specs, opts, rest) ~>
+    argv(prog, subpath, positionals, flag_specs, opts, rest)[0]
+  ~[2]~>
+  (prog, subpath, positionals, flag_specs, opts, rest) ~> prog

@@ -1,0 +1,91 @@
+--- cli-c tests: pure surface (`sh_quote`, `argv`) plus spawn smoke
+--- tests over `run`/`shell`. The exec cases need a working
+--- posix_spawnp/sh on the host — they exercise real libc through the
+--- ffi module.
+
+from "cli-c" import { run, shell, argv, sh_quote }
+
+test_sh_quote_plain := assert sh_quote("abc") = "'abc'"
+
+test_sh_quote_empty := assert sh_quote("") = "''"
+
+test_sh_quote_spaces := assert sh_quote("a b c") = "'a b c'"
+
+test_sh_quote_embedded := assert sh_quote("it's") = "'it'\\''s'"
+
+test_sh_quote_injection := assert sh_quote("x; rm -rf /") = "'x; rm -rf /'"
+
+test_argv_prog_only := assert argv("echo", [], [], [], null, []) = ["echo"]
+
+test_argv_subpath := assert argv("gh", ["pr", "create"], [], [], null, [])
+  = ["gh", "pr", "create"]
+
+test_argv_positionals := assert argv("add", [], ["a.txt", "b.txt"], [], null, [])
+  = ["add", "a.txt", "b.txt"]
+
+test_argv_flag_on := assert argv("gh", [], [],
+  [{ name: "verbose", flag: "--verbose", kind: "flag" }],
+  { verbose: true }, []) = ["gh", "--verbose"]
+
+test_argv_flag_off := assert argv("gh", [], [],
+  [{ name: "verbose", flag: "--verbose", kind: "flag" }],
+  { verbose: false }, []) = ["gh"]
+
+test_argv_flag_absent := assert argv("gh", [], [],
+  [{ name: "verbose", flag: "--verbose", kind: "flag" }],
+  {}, []) = ["gh"]
+
+test_argv_string := assert argv("gh", ["pr", "create"], [],
+  [{ name: "title", flag: "--title", kind: "string" }],
+  { title: "hi there" }, []) = ["gh", "pr", "create", "--title", "hi there"]
+
+test_argv_int := assert argv("tool", [], ["in"],
+  [{ name: "n", flag: "-n", kind: "int" }],
+  { n: 3 }, []) = ["tool", "in", "-n", "3"]
+
+test_argv_strings := assert argv("tool", [], [],
+  [{ name: "tag", flag: "-t", kind: "strings" }],
+  { tag: ["a", "b"] }, []) = ["tool", "-t", "a", "-t", "b"]
+
+test_argv_rest := assert argv("tool", [], ["f"], [], null, ["--", "x"])
+  = ["tool", "f", "--", "x"]
+
+test_argv_null_opts := assert argv("t", [], ["p"],
+  [{ name: "x", flag: "--x", kind: "string" }], null, []) = ["t", "p"]
+
+test_argv_mixed := assert argv("gh", ["pr", "create"], ["main"],
+  [{ name: "title", flag: "--title", kind: "string" },
+   { name: "draft", flag: "--draft", kind: "flag" },
+   { name: "label", flag: "--label", kind: "strings" }],
+  { title: "x", draft: true, label: ["bug", "cli"] }, ["extra"])
+  = ["gh", "pr", "create", "main", "--title", "x", "--draft",
+     "--label", "bug", "--label", "cli", "extra"]
+
+--- spawn: `echo` exits 0 and stdout is captured.
+test_run_echo := assert tag.untag(run(["echo", "hello"])).value.stdout
+  = "hello\n"
+
+test_run_echo_code := assert tag.untag(run(["echo", "hello"])).value.code = 0
+
+--- spawn: the child's exit status passes through (sh exits 3).
+test_run_code := assert tag.untag(run(["sh", "-c", "exit 3"])).value.code = 3
+
+--- spawn: stderr capture on `fd 2`.
+test_run_stderr := assert tag.untag(run(["sh", "-c", "echo oops >&2"])).value.stderr
+  = "oops\n"
+
+--- spawn: quoting survives — 'a b' is one word, no shell splitting.
+test_run_word := assert tag.untag(run(["echo", "a b"])).value.stdout
+  = "a b\n"
+
+--- spawn: a missing program is the child's 127 (sh's exec failure), not
+--- a spawn error — posix_spawnp already succeeded on `sh` itself.
+test_run_missing := assert tag.untag(run(["no-such-command-xyzzy"])).value.code
+  = 127
+
+--- spawn: empty argv is an `err(Spawn)` — EINVAL, no process ran.
+test_run_empty := assert tag.tag_of(run([])) = "err"
+
+--- shell: a raw pipeline line runs verbatim under `sh -c`.
+test_shell_pipe := assert tag.untag(shell("echo ab | tr ab AB")).value.stdout
+  = "AB\n"

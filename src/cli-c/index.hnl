@@ -1,0 +1,235 @@
+--- cli-c -- the libc backend for the `cli` contract.
+---
+--- Implements `run`/`argv`/`sh_quote`/`shell` (the `cli` port surface)
+--- directly over `ffi.call("libc.so.6", ...)`: no generated libc adapter
+--- dependency — the whole C surface is `tmpfile`, `fileno`,
+--- `posix_spawnp`, `waitpid`, `rewind`, `read`, `fclose`, `strerror`.
+---
+--- Conformance to the contract is nominal: exports are intentionally
+--- untyped (`export run := ...`, not `export run: Run := ...`). The
+--- module file-loader treats an export's type annotation as a callee,
+--- which fails for imported arrow types — the limitation every `*-c`
+--- package documents (see intl-c). The `cli` module is contract data
+--- and is not imported here.
+---
+--- Capture design (the fetch-c tmpfile-drain pattern): `run` builds the
+--- line `exec <sh_quote'd argv> >/proc/self/fd/<ofd>
+--- 2>/proc/self/fd/<efd>` and spawns it under `sh -c`. The two tmpfile()
+--- FILE*s are inherited by the child, so `/proc/self/fd/N` there names
+--- the same open file descriptions; `exec` makes the tool itself the
+--- spawned process (its exit status is what waitpid reports, with no
+--- intermediate shell in the way). After the child exits we rewind(3)
+--- both streams — tmpfile writes share the description's file offset,
+--- so the rewind seeks it back to 0 — then drain each via read(2) on
+--- fileno(3). tmpfile(3) auto-unlinks, and fclose releases everything.
+---
+--- Platform: Linux only for now — `/proc/self/fd/<N>` is how the child
+--- addresses the inherited fds (the workspace target is linux x86_64).
+--- A `cli-posix` backend would use `pipe()` + `posix_spawn_file_actions_
+--- adddup2` instead; the port signature does not change.
+---
+--- `ffi`, `type`, `tag`, `hash_map`, `math` are host modules on the
+--- stdlib chain — reached by qualified call with no import line (the
+--- intl-c convention).
+
+from "result" import { ok, err }
+from "str" import * as strm
+from "bytes" import * as bytesm
+
+--- EINVAL — returned in `Spawn.code` for a malformed `run` input (empty
+--- argv) where no C call has run yet.
+EINVAL := 22
+
+--- `strerror(code)` — the C message for an errno value, or a bare
+--- "errno <n>" when strerror returns NULL.
+strerror := (n) ~> do {
+  s := ffi.call("libc.so.6", "strerror", [n], ["i32"], "cstr", false)
+  if s == null { "errno " + type.to_string(n) } else { s }
+}
+
+--- utf8(s) ++ NUL — `bytes` struct fields embed the buffer's address
+--- verbatim, so argv strings carry their own terminator.
+nul_bytes := (s) ~> bytesm.concat(bytesm.utf8_encode(s), bytesm.from_list([0]))
+
+--- Stringify any scalar for argv emission.
+to_str := (v) ~> type.to_string(v)
+
+--- POSIX single-quote escape — `'it'\''s'` shape.
+export sh_quote := (s) ~> "'" + strm.replace(s, "'", "'\\''") + "'"
+
+--- One FlagSpec's worth of argv words appended to `acc`. `opts` may be
+--- null (no options declared on the command).
+emit_spec := (acc, spec, opts) ~> do {
+  if opts == null || !hash_map.has(opts, spec.name) {
+    acc
+  } else {
+    v := hash_map.get_or(opts, spec.name, null)
+    if spec.kind == "flag" {
+      if v { [...acc, spec.flag] } else { acc }
+    } else if spec.kind == "strings" {
+      if type.is_array(v) {
+        do {
+          out := acc
+          for x in v { do {
+            out := [...out, spec.flag, to_str(x)]
+          } }
+          out
+        }
+      } else {
+        -- a scalar where the spec said "strings" degrades to one
+        -- `flag <v>` pair rather than dropping the option silently
+        [...acc, spec.flag, to_str(v)]
+      }
+    } else {
+      -- "string" / "int" (and any unknown kind): `flag <value>`
+      [...acc, spec.flag, to_str(v)]
+    }
+  }
+}
+
+--- `cli.argv` — pure argv assembly; see the contract for the shape.
+export argv := (prog, subpath, positionals, flag_specs, opts, rest) ~> do {
+  out := [to_str(prog)]
+  for s in subpath { do {
+    out := [...out, to_str(s)]
+  } }
+  for p in positionals { do {
+    out := [...out, to_str(p)]
+  } }
+  for spec in flag_specs { do {
+    out := emit_spec(out, spec, opts)
+  } }
+  for r in rest { do {
+    out := [...out, to_str(r)]
+  } }
+  out
+}
+
+--- `'a' 'b' 'c'` — every argv element single-quoted, space-separated.
+quote_argv := (av) ~> do {
+  qs := []
+  for a in av { do {
+    qs := [...qs, sh_quote(to_str(a))]
+  } }
+  strm.join(qs, " ")
+}
+
+--- drain a rewound FILE* fd into Bytes via read(2) in 64 KiB chunks
+--- (the fetch-c read_all loop over direct ffi calls).
+read_all := (fd) ~> while { fd: fd, acc: bytesm.from_list([]) } {
+  (fd, acc) ~> do {
+    r := ffi.call("libc.so.6", "read", [fd], ["i32", "out_buf:65536"], "i64", false)
+    if r.ret <= 0 {
+      { out: acc }
+    } else {
+      { state: { fd: fd, acc: bytesm.concat(acc, r.buf) } }
+    }
+  }
+}
+
+--- waitpid(pid, &st, 0) → the decoded exit code, or `err(Spawn)` when
+--- the wait itself failed (the error path still drains + closes the
+--- tmpfiles so nothing leaks).
+wait_decode := (st) ~>
+  if math.bit_and(st, 127) == 0 {
+    -- WIFEXITED: code lives in the high byte, (st >> 8) & 0xff
+    math.bit_and(math.shr(st, 8), 255)
+  } else {
+    -- signal death: 128 + WTERMSIG (st & 0x7f)
+    128 + math.bit_and(st, 127)
+  }
+
+--- After a successful spawn: waitpid, decode the status, rewind + drain
+--- both tmpfiles, fclose, and build the Output record. The pid cell
+--- comes back in `sp.vals[0]` (io_scalar readback).
+finish_run := (pid, outf, errf, ofd, efd) ~> do {
+  w := ffi.call("libc.so.6", "waitpid", [pid, 0, 0],
+    ["i32", "io_scalar:i32", "i32"], "i32", false)
+  if w.ret < 0 {
+    do {
+      e := ffi.errno()
+      _ := ffi.call("libc.so.6", "fclose", [outf], ["ptr"], "i32", false)
+      _ := ffi.call("libc.so.6", "fclose", [errf], ["ptr"], "i32", false)
+      err({ code: e, message: "cli-c: waitpid: " + strerror(e) })
+    }
+  } else {
+    do {
+      code := wait_decode(w.vals[0])
+      _ := ffi.call("libc.so.6", "rewind", [outf], ["ptr"], "void", false)
+      _ := ffi.call("libc.so.6", "rewind", [errf], ["ptr"], "void", false)
+      stdout := bytesm.utf8_decode(read_all(ofd))
+      stderr := bytesm.utf8_decode(read_all(efd))
+      _ := ffi.call("libc.so.6", "fclose", [outf], ["ptr"], "i32", false)
+      _ := ffi.call("libc.so.6", "fclose", [errf], ["ptr"], "i32", false)
+      ok({ code: code, stdout: stdout, stderr: stderr })
+    }
+  }
+}
+
+--- Spawn `script` under `sh -c` with the two tmpfile redirections
+--- appended. The pid cell and the argv table marshal as an
+--- `io_scalar:i32` + an `in_struct` of pointer slots — the struct's
+--- `end` field stays absent from the record, which the marshaller
+--- writes as NULL (argv's terminator).
+---
+--- `posix_spawnp` returns 0 on success or the errno *value* directly
+--- (not -1/errno), so `sp.ret != 0` is the failure check.
+run_line := (script) ~> do {
+  -- errno is read after each call so the second tmpfile can't clobber
+  -- the first's failure code.
+  outf := ffi.call("libc.so.6", "tmpfile", [], [], "ptr", false)
+  eo := ffi.errno()
+  errf := ffi.call("libc.so.6", "tmpfile", [], [], "ptr", false)
+  ee := ffi.errno()
+  if outf == 0 || errf == 0 {
+    do {
+      e := if outf == 0 { eo } else { ee }
+      _ := if outf != 0 {
+        ffi.call("libc.so.6", "fclose", [outf], ["ptr"], "i32", false)
+      } else { 0 }
+      _ := if errf != 0 {
+        ffi.call("libc.so.6", "fclose", [errf], ["ptr"], "i32", false)
+      } else { 0 }
+      err({ code: e, message: "cli-c: tmpfile: " + strerror(e) })
+    }
+  } else {
+    do {
+      ofd := ffi.call("libc.so.6", "fileno", [outf], ["ptr"], "i32", false)
+      efd := ffi.call("libc.so.6", "fileno", [errf], ["ptr"], "i32", false)
+      line := script
+        + " >/proc/self/fd/" + type.to_string(ofd)
+        + " 2>/proc/self/fd/" + type.to_string(efd)
+      av := { a0: nul_bytes("sh"), a1: nul_bytes("-c"), a2: nul_bytes(line) }
+      sp := ffi.call("libc.so.6", "posix_spawnp",
+        [0, "sh", 0, 0, av, 0],
+        ["io_scalar:i32", "cstr", "ptr", "ptr",
+         "in_struct:{a0:bytes,a1:bytes,a2:bytes,end:ptr}", "ptr"],
+        "i32", false)
+      if sp.ret != 0 {
+        do {
+          _ := ffi.call("libc.so.6", "fclose", [outf], ["ptr"], "i32", false)
+          _ := ffi.call("libc.so.6", "fclose", [errf], ["ptr"], "i32", false)
+          err({ code: sp.ret,
+                message: "cli-c: posix_spawnp: " + strerror(sp.ret) })
+        }
+      } else {
+        finish_run(sp.vals[0], outf, errf, ofd, efd)
+      }
+    }
+  }
+}
+
+--- `cli.run` — spawn `av[0]` (PATH lookup) with capture. The line is
+--- `exec <quoted argv> >fd 2>fd` so the tool replaces the `sh -c` shell
+--- and waitpid reports the tool's own status.
+export run := (av) ~>
+  match av {
+    []: err({ code: EINVAL, message: "cli-c: run: empty argv" }),
+    _: run_line("exec " + quote_argv(av))
+  }
+
+--- `cli.shell` — run a raw command line under `sh -c` (no quoting; the
+--- input is caller-trusted). The line is wrapped in a `{ ...; }` group
+--- so the capture redirections cover the whole pipeline, not just its
+--- last stage.
+export shell := (cmdline) ~> run_line("{ " + cmdline + "\n}")
