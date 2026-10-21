@@ -18,25 +18,34 @@ Part of the `handl-lang` org split (ADR-0128).
   lower to `FlagSpec`s); `sh_quote` is the POSIX single-quote escaper;
   `shell(cmdline)` runs a caller-trusted raw `sh -c` line.
 - **`cli-c` (backend)** — implements the port directly on
-  `ffi.call("libc.so.6", ...)`: `tmpfile`/`fileno`/`posix_spawnp`/
-  `waitpid`/`rewind`/`read`/`fclose`/`strerror`. No generated libc
-  adapter dep — the ffi descriptor vocabulary (`io_scalar:i32`,
-  `in_struct:{…:bytes,…,end:ptr}`, `out_buf:N`) covers the whole call
-  surface.
+  `ffi.call("libc.so.6", ...)`: `pipe2`/`fcntl`/
+  `posix_spawn_file_actions_{init,addclose,adddup2,destroy}`/
+  `posix_spawnp`/`poll`/`read`/`close`/`waitpid`/`malloc`/`free`/
+  `strerror`. No generated libc adapter dep — the ffi descriptor
+  vocabulary (`io_scalar:i32`, `strv`, `in_struct:{…}`, `out_buf:N`,
+  `out_ptr:N`) covers the whole call surface.
 
 ## Capture design
 
-`run` execs `sh -c 'exec <quoted argv> >/proc/self/fd/<ofd>
-2>/proc/self/fd/<efd>'` under `posix_spawnp`; the two `tmpfile()` streams
-are inherited by the child, so `/proc/self/fd/N` names the same open file
-descriptions there. After `waitpid`, each FILE\* is `rewind`n (the shared
-offset returns to 0) and drained via `read(2)` on `fileno(3)` — the
-`fetch-c` tmpfile-drain pattern; `tmpfile` auto-unlinks.
+`run` spawns `argv[0]` directly under `posix_spawnp` — no `sh -c`, no
+`/proc`, no tmpfiles. The argv list marshals verbatim via the `strv`
+descriptor (NULL-terminated `char*[]`), so `run` is injection-free by
+construction; `shell` is the same path with argv `["sh", "-c", cmdline]`.
 
-**Linux only for now** — `/proc/self/fd` is the inherited-fd addressing
-scheme (the workspace target is linux x86_64). A `cli-posix` variant
-would use `pipe()` + `posix_spawn_file_actions_adddup2` instead; the port
-signature does not change.
+Two `pipe2(O_CLOEXEC)` pairs carry stdout/stderr. A malloc'd
+`posix_spawn_file_actions_t` (80 bytes opaque on linux-x86_64 glibc; 128
+allocated) records `addclose` on the parent's read ends then `adddup2`
+of the write ends onto the child's fds 1/2. In the parent the write
+ends close at once, the read ends go `O_NONBLOCK` via `fcntl(F_SETFL)`,
+and a `poll` loop drains whichever end signalled until both report EOF —
+sequential drains would deadlock once a child fills the 64 KiB pipe
+buffer on the stream the parent is not reading. `waitpid` then reports
+the child's own status.
+
+**Linux only for now** — the `pipe2`/`poll`/`fcntl` flag constants and
+the `posix_spawn_file_actions_t` footprint are the glibc/linux values
+(the workspace target is linux x86_64). The port signature does not
+change for other backends.
 
 ## Layout
 

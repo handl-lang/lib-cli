@@ -2,8 +2,9 @@
 ---
 --- `cli` is the *port*: it declares the types and arrow signatures every
 --- CLI-process backend implements. `cli-c` (the sibling module in this
---- repo) is the reference backend over libc — `posix_spawnp` on `sh -c`
---- with stdout/stderr captured through inherited tmpfile fds.
+--- repo) is the reference backend over libc — a direct `posix_spawnp`
+--- (no `sh -c`) with stdout/stderr captured through `pipe2` pairs wired
+--- by spawn file-actions and drained via `poll`.
 ---
 --- Surface:
 ---   run(argv)                                  -- spawn argv[0] via PATH,
@@ -35,8 +36,9 @@ from "type" import { Int, String, Obj, Value }
 export Output := { code: Int, stdout: String, stderr: String }
 
 --- A spawn-time failure: `code` is the C `errno` of the failing call
---- (`tmpfile`/`fileno`/`posix_spawnp`/`waitpid`), `message` names the
---- call and the `strerror` text when available.
+--- (`pipe2`/`malloc`/`posix_spawn_file_actions_*`/`posix_spawnp`/
+--- `fcntl`/`poll`/`read`/`waitpid`), `message` names the call and the
+--- `strerror` text when available.
 export Spawn := { code: Int, message: String }
 
 --- One command-line option spec for `argv`. `name` is the key looked up
@@ -54,8 +56,10 @@ export Spawn := { code: Int, message: String }
 export FlagSpec := { name: String, flag: String, kind: String }
 
 --- Spawn `argv[0]` (PATH lookup) with the rest as arguments, wait for
---- the child, and capture both streams. The argv array is literal — no
---- shell quoting happens, so elements containing spaces stay one word.
+--- the child, and capture both streams. The argv array is literal — it
+--- goes to `execvp` verbatim with no shell in between, so elements
+--- containing spaces or shell metacharacters stay one word and `run`
+--- is injection-free by construction.
 export Run := ([String]) ~[1]~> Result<Output, Spawn>
 
 --- Pure argv assembly:
@@ -72,8 +76,9 @@ export Argv := (String, [String], [Value], [FlagSpec], Obj, [Value]) ~> [String]
 
 --- POSIX single-quote escaping: wraps `s` in `'` and replaces each inner
 --- `'` with `'\''`, so the result is one argv word under POSIX shell
---- tokenization for any input. Pure — the backend composes it to build
---- the `sh -c` line `run` executes.
+--- tokenization for any input. Pure — `run` no longer composes it
+--- (argv is not shell-parsed); it remains for callers that build
+--- `sh -c` lines themselves (generated adapters, `shell` callers).
 export ShQuote := (String) ~> String
 
 --- Run a raw `sh -c` command line — no quoting, full shell syntax
