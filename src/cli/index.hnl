@@ -38,6 +38,27 @@
 --- a spec name is close. `run` accepts `argv`'s `Result` directly and
 --- propagates the `err` — generated adapters that write
 --- `run(argv(...))` get call-time validation with no adapter change.
+---
+--- Composing output: `Output.stdout`/`stderr` are plain `String`s — the
+--- caller composes existing pure arrows over them. This port ships no
+--- `Output` methods (no `x.json()`: method adapters are not composable,
+--- not treeshakeable, and would blur the purity line). The recipe is
+--- free functions:
+---
+---   from "json" import { parse }          -- lib-json: String ~> Value
+---   from "str-handl" import { lines }     -- str-handl: String ~> [String]
+---
+---   r := gh_config_list()                  -- adapter call → ok Output
+---   v := parse(tag.untag(r).value.stdout)  -- --json stdout → Value
+---   ls := lines(tag.untag(r).value.stdout) -- line-oriented stdout
+---
+--- `parse` is lenient, not validating: empty/garbage/unclosed input
+--- returns `null`, and junk trailing a complete value yields `null`
+--- too (the last top-level value wins). One input class *raises*: a
+--- stray unmatched closer (`}`/`]`) with an empty frame stack fails
+--- `match: no arm matched` — an eval error, not an `err`-tagged
+--- result. For stdout you asked for (`--json` was passed), compose
+--- directly; for untrusted text, guard the call.
 
 from "result" import { Result }
 from "type" import { Int, String, Obj, Value }
@@ -120,7 +141,6 @@ export Shell := (String) ~[1]~> Result<Output, Spawn>
 --- so any conforming backend can be checked against it.
 export argv_head := (argv: Argv) ~>
   (prog, subpath, positionals, flag_specs, opts, rest) ~>
-    tag.untag(argv(prog, subpath, positionals, flag_specs, opts, rest))
-      .value[0]
+    tag.untag(argv(prog, subpath, positionals, flag_specs, opts, rest)).value[0]
   ~[2]~>
   (prog, subpath, positionals, flag_specs, opts, rest) ~> prog
