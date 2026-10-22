@@ -47,6 +47,49 @@ the `posix_spawn_file_actions_t` footprint are the glibc/linux values
 (the workspace target is linux x86_64). The port signature does not
 change for other backends.
 
+## Composing output
+
+`Output.stdout`/`stderr` arrive as plain `String`s — there is nothing
+to unwrap beyond `tag.untag(r).value`, and nothing to "convert": text
+output already *is* a `String`. Callers parse stdout by composing
+**free pure arrows**, not methods on `Output` — `x.json()`-style
+adapters were rejected: a method is not composable, not treeshakeable,
+and would hide the effect-free `~>` purity line.
+
+```handl
+from "json" import { parse }          -- lib-json:  String ~> Value
+from "str-handl" import { lines }     -- str-handl: String ~> [String]
+
+r := gh_config_list()                  -- generated adapter → ok Output
+v := parse(tag.untag(r).value.stdout)  -- `--json` stdout → Value
+ls := lines(tag.untag(r).value.stdout) -- line-oriented stdout → lines
+```
+
+- `parse` (`handl-lang/lib-json`, kit module `json`) — pure-Handl JSON
+  → `Value`. Also `stringify` and the `json` codec record.
+- `lines` (`handl-lang/lib-str-handl`, package `str-handl`) — Rust
+  `str::lines` semantics: `\r\n` is one terminator, a trailing `\n`
+  leaves no empty tail line, `""` → `[""]`. (`str.lines` is the port
+  axiom; `str-handl` is the pure-Handl impl over `char`.)
+
+Error semantics of `parse` — **lenient, not validating**: `""`,
+`"garbage"`, unclosed `"{"`/`"[1,2"` all return `null`, and junk
+trailing a complete value (`{"a":1}x`) returns `null` as well (the
+last top-level value wins). One input class *raises*: a stray
+unmatched closer (`}`/`]`) with an empty frame stack fails
+`match: no arm matched` — an eval error, **not** an `err`-tagged
+`Result`. For stdout produced under a `--json` flag, compose
+directly; for untrusted text, guard the call site.
+
+Package wiring for consumers: `json` resolves through the host module
+chain (kit-stdlib registers it — no `.handl.toml` row needed);
+`str-handl` maps like `cli`/`cli-c` do:
+
+```toml
+[dependencies]
+str-handl = { path = "../lib-str-handl/src" }
+```
+
 ## Layout
 
 ```text
