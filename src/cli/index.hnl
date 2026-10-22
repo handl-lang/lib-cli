@@ -85,8 +85,17 @@ export Spawn := { code: Int, message: String }
 ---
 --- The `kind` spellings match the `opt:<kind>:<name>:<flag>` arg
 --- descriptors the sdkgen-cli emitter produces (`opt:string:title:--title`
---- lowers to `{ name: "title", flag: "--title", kind: "string" }`).
-export FlagSpec := { name: String, flag: String, kind: String }
+--- lowers to `{ name: "title", flag: "--title", kind: "string", doc: "" }` —
+--- the descriptor's optional trailing `:doc` component, empty when the
+--- probe learned no description).
+---
+--- `doc` is the option's one-line description as read from the tool's
+--- help table — empty (`""`) when the probe could not learn one. It is
+--- documentation only: `argv`/`check` ignore it, so a spec with `doc`
+--- set behaves identically to one without it. Generated adapters carry
+--- it so the emitted SDK docs can render an option table without a
+--- second trip through the tool's help.
+export FlagSpec := { name: String, flag: String, kind: String, doc: String }
 
 --- Spawn `argv[0]` (PATH lookup) with the rest as arguments, wait for
 --- the child, and capture both streams. The argv array is literal — it

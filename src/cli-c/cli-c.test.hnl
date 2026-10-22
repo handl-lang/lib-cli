@@ -63,6 +63,24 @@ test_argv_mixed := assert tag.untag(m.argv("gh", ["pr", "create"], ["main"],
   = ["gh", "pr", "create", "main", "--title", "x", "--draft",
      "--label", "bug", "--label", "cli", "extra"]
 
+--- doc: the spec's `doc` string rides along unnoticed — argv ignores it,
+--- so a spec with `doc` set emits the same words as one without.
+test_argv_doc_set := assert tag.untag(m.argv("gh", ["pr", "create"], [],
+  [{ name: "title", flag: "--title", kind: "string",
+     doc: "Title for the pull request" }],
+  { title: "x" }, [])).value
+  = ["gh", "pr", "create", "--title", "x"]
+
+--- doc: an explicitly empty doc behaves the same.
+test_argv_doc_empty := assert tag.untag(m.argv("gh", [], [],
+  [{ name: "title", flag: "--title", kind: "string", doc: "" }],
+  { title: "x" }, [])).value = ["gh", "--title", "x"]
+
+--- doc: an absent doc behaves the same (record literals may omit keys).
+test_argv_doc_absent := assert tag.untag(m.argv("gh", [], [],
+  [{ name: "title", flag: "--title", kind: "string" }],
+  { title: "x" }, [])).value = ["gh", "--title", "x"]
+
 --- check: every opts key naming a spec passes with ok(null).
 test_check_known := assert tag.tag_of(m.check(
   [{ name: "label", flag: "--label", kind: "string" }],
@@ -124,6 +142,18 @@ test_check_multiple_unknown_hint := assert str.contains(
      { name: "title", flag: "--title", kind: "string" }],
     { labl: "x", tytle: "y" })).value.message,
   "did you mean 'title'")
+
+--- doc: check ignores `doc` too — a known key passes and an unknown one
+--- errs identically whether or not the spec carries a doc string.
+test_check_doc_set := assert tag.tag_of(m.check(
+  [{ name: "label", flag: "--label", kind: "string",
+     doc: "Add a label" }],
+  { label: "x" })) = "ok"
+
+test_check_doc_set_unknown := assert tag.untag(m.check(
+  [{ name: "label", flag: "--label", kind: "string",
+     doc: "Add a label" }],
+  { labl: "x" })).value.code = 22
 
 --- argv: an unknown opts key fails the whole call — no plausible-but-
 --- wrong argv comes out (the hallucinated-flag case).
