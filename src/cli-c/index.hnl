@@ -1,8 +1,8 @@
 --- cli-c -- the libc backend for the `cli` contract.
 ---
---- Implements `run`/`argv`/`sh_quote`/`shell` (the `cli` port surface)
---- directly over `ffi.call("libc.so.6", ...)`: no generated libc adapter
---- dependency — the whole C surface is `pipe2`, `fcntl`,
+--- Implements `run`/`argv`/`check`/`sh_quote`/`shell` (the `cli` port
+--- surface) directly over `ffi.call("libc.so.6", ...)`: no generated
+--- libc adapter dependency — the whole C surface is `pipe2`, `fcntl`,
 --- `posix_spawn_file_actions_{init,addclose,adddup2,destroy}`,
 --- `posix_spawnp`, `poll`, `read`, `close`, `waitpid`, `malloc`/`free`,
 --- `strerror`.
@@ -111,22 +111,120 @@ emit_spec := (acc, spec, opts) ~> do {
   }
 }
 
---- `cli.argv` — pure argv assembly; see the contract for the shape.
-export argv := (prog, subpath, positionals, flag_specs, opts, rest) ~> do {
-  out := [to_str(prog)]
-  for s in subpath { do {
-    out := [...out, to_str(s)]
-  } }
-  for p in positionals { do {
-    out := [...out, to_str(p)]
-  } }
+--- List membership over spec names — specs are a handful per command,
+--- a linear scan is fine (no `Set` in the stdlib chain).
+name_member := (x, names) ~> do {
+  found := false
+  for n in names {
+    if x == n { found := true }
+  }
+  found
+}
+
+--- Did-you-mean cutoff: an unknown key within this `str.levenshtein`
+--- distance of a spec name earns a hint; a prefix relation (`lab` vs
+--- `label`) is a stronger signal than raw distance and always earns one.
+SUGGEST_DIST := 2
+
+--- The closest spec name to `key`, or null when nothing is near enough
+--- to be a believable typo. Min edit distance within SUGGEST_DIST wins;
+--- otherwise a name that is a prefix of `key` (or has `key` as a
+--- prefix) is suggested.
+suggest := (key, names) ~> do {
+  best := null
+  best_d := SUGGEST_DIST + 1
+  for n in names {
+    do {
+      d := strm.levenshtein(key, n)
+      if d < best_d { do {
+        best := n
+        best_d := d
+      } }
+    }
+  }
+  if best != null {
+    best
+  } else {
+    hit := null
+    for n in names {
+      if hit == null && (strm.starts_with(n, key)
+          || strm.starts_with(key, n)) {
+        hit := n
+      }
+    }
+    hit
+  }
+}
+
+--- One unknown-key phrase for the `check` message: `'key'` plus a
+--- `— did you mean 'name'?` hint when `suggest` finds a close spec.
+unknown_phrase := (key, names) ~> do {
+  s := suggest(key, names)
+  if s == null {
+    "'" + key + "'"
+  } else {
+    "'" + key + "' — did you mean '" + s + "'?"
+  }
+}
+
+--- `cli.check` — call-time option validation: `ok(null)` when every key
+--- in `opts` names a spec in `flag_specs`, `err(Spawn)` (EINVAL) listing
+--- each unknown key with a did-you-mean hint when a spec name is close.
+--- `opts` may be null (no options supplied — always passes). Pure;
+--- `argv` runs it before emitting any words.
+export check := (flag_specs, opts) ~> do {
+  names := []
   for spec in flag_specs { do {
-    out := emit_spec(out, spec, opts)
+    names := [...names, spec.name]
   } }
-  for r in rest { do {
-    out := [...out, to_str(r)]
-  } }
-  out
+  bad := []
+  if opts != null {
+    for k in hash_map.keys(opts) {
+      if !name_member(k, names) { bad := [...bad, k] }
+    }
+  }
+  match bad {
+    []: ok(null),
+    _: do {
+      parts := []
+      for k in bad { do {
+        parts := [...parts, unknown_phrase(k, names)]
+      } }
+      plural := match bad { [_]: "", _: "s" }
+      err({ code: EINVAL,
+            message: "cli-c: argv: unknown option" + plural + " "
+              + strm.join(parts, "; ") })
+    }
+  }
+}
+
+--- `cli.argv` — pure argv assembly returning `Result<[String], Spawn>`;
+--- see the contract for the shape. `check` runs first: an `opts` key
+--- with no matching spec (the hallucinated-`labl` case) is an
+--- `err(Spawn)` — EINVAL — rather than a silently dropped flag, so a
+--- typo'd option can never produce a plausible-looking argv.
+export argv := (prog, subpath, positionals, flag_specs, opts, rest) ~> do {
+  c := check(flag_specs, opts)
+  if tag.tag_of(c) == "err" {
+    c
+  } else {
+    do {
+      out := [to_str(prog)]
+      for s in subpath { do {
+        out := [...out, to_str(s)]
+      } }
+      for p in positionals { do {
+        out := [...out, to_str(p)]
+      } }
+      for spec in flag_specs { do {
+        out := emit_spec(out, spec, opts)
+      } }
+      for r in rest { do {
+        out := [...out, to_str(r)]
+      } }
+      ok(out)
+    }
+  }
 }
 
 --- little-endian i32 at byte offset `off` of a Bytes buffer — the fd
@@ -409,11 +507,24 @@ spawn_capture := (av) ~> do {
 --- `cli.run` — spawn `av[0]` (PATH lookup) with capture. argv is
 --- marshalled verbatim — no shell parses it, so `run` is
 --- injection-free by construction.
-export run := (av) ~>
-  match av {
-    []: err({ code: EINVAL, message: "cli-c: run: empty argv" }),
-    _: spawn_capture(av)
+---
+--- `av` is either a literal argv list or the `Result` `argv` returns:
+--- an `err` short-circuits untouched (generated adapters write
+--- `run(argv(...))`, so an option-validation failure surfaces as run's
+--- own spawn-style error with no adapter change), an `ok` payload is
+--- unwrapped and spawned.
+export run := (av) ~> do {
+  t := tag.tag_of(av)
+  if t == "err" {
+    av
+  } else {
+    v := if t == "ok" { tag.untag(av).value } else { av }
+    match v {
+      []: err({ code: EINVAL, message: "cli-c: run: empty argv" }),
+      _: spawn_capture(v)
+    }
   }
+}
 
 --- `cli.shell` — run a raw command line under `sh -c` (no quoting; the
 --- input is caller-trusted). Same direct-spawn capture path — the

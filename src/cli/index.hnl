@@ -13,6 +13,9 @@
 ---                                                 (caller-trusted input)
 ---   argv(prog, subpath, positionals, flag_specs, opts, rest)
 ---                                              -- pure argv assembly
+---                                                 (Result: validation)
+---   check(flag_specs, opts)                    -- pure opts-key
+---                                                 validation
 ---   sh_quote(s)                                -- pure POSIX single-quote
 ---                                                 escaper
 ---
@@ -24,8 +27,17 @@
 ---
 --- `~[1]~>` marks `run`/`shell` effectful: every backend reaches the OS
 --- process interface through `ffi.call` (or the host equivalent).
---- `argv`/`sh_quote` are pure so the argv shape is testable without a
---- process table.
+--- `argv`/`check`/`sh_quote` are pure so the argv shape and the
+--- option-validation policy are testable without a process table.
+---
+--- `argv`/`check` fail on *unknown* `opts` keys — a key that names no
+--- spec in `flag_specs` (a typo'd `{ labl: "x" }` silently dropping
+--- `--label` is the motivating case). The error reuses the `Spawn`
+--- shape with a synthetic `code` (EINVAL, 22 — no C call ran) and a
+--- `message` listing each unknown key plus a `did you mean` hint when
+--- a spec name is close. `run` accepts `argv`'s `Result` directly and
+--- propagates the `err` — generated adapters that write
+--- `run(argv(...))` get call-time validation with no adapter change.
 
 from "result" import { Result }
 from "type" import { Int, String, Obj, Value }
@@ -60,19 +72,35 @@ export FlagSpec := { name: String, flag: String, kind: String }
 --- goes to `execvp` verbatim with no shell in between, so elements
 --- containing spaces or shell metacharacters stay one word and `run`
 --- is injection-free by construction.
+---
+--- Besides a literal `[String]`, a conforming backend accepts the
+--- `Result<[String], Spawn>` `argv` returns: an `err` short-circuits to
+--- `err(Spawn)` with no spawn attempted, an `ok` payload is spawned as
+--- the literal argv.
 export Run := ([String]) ~[1]~> Result<Output, Spawn>
+
+--- Pure option validation: `check(flag_specs, opts)` returns
+--- `ok(null)` when every key in `opts` names a spec in `flag_specs`
+--- (`opts` may be `null`, which always passes), and `err(Spawn)` —
+--- `code` EINVAL, `message` listing each unknown key with a
+--- `did you mean` hint when a spec name is within the backend's
+--- suggestion threshold (edit distance or prefix match) — otherwise.
+export Check := ([FlagSpec], Obj) ~> Result<Value, Spawn>
 
 --- Pure argv assembly:
 ---
 ---   argv(prog, subpath, positionals, flag_specs, opts, rest)
 ---
---- emits `[prog] ++ subpath ++ positionals ++ flags ++ rest` with every
---- element stringified (`type.to_string`, so Int/Bool positionals and
---- option values are safe). `subpath` is the command path after the
+--- emits `ok([prog] ++ subpath ++ positionals ++ flags ++ rest)` with
+--- every element stringified (`type.to_string`, so Int/Bool positionals
+--- and option values are safe). `subpath` is the command path after the
 --- program word (e.g. `["pr", "create"]` for `gh pr create`); `opts` is
 --- an `Obj` record (or `null`) expanded against `flag_specs`; `rest` is
---- the variadic tail appended verbatim.
-export Argv := (String, [String], [Value], [FlagSpec], Obj, [Value]) ~> [String]
+--- the variadic tail appended verbatim. `check` runs first: an `opts`
+--- key with no matching spec returns the `check` error instead of a
+--- word list.
+export Argv := (String, [String], [Value], [FlagSpec], Obj, [Value])
+  ~> Result<[String], Spawn>
 
 --- POSIX single-quote escaping: wraps `s` in `'` and replaces each inner
 --- `'` with `'\''`, so the result is one argv word under POSIX shell
@@ -86,12 +114,13 @@ export ShQuote := (String) ~> String
 --- untrusted text (use `run` + `argv`/`sh_quote` for that).
 export Shell := (String) ~[1]~> Result<Output, Spawn>
 
---- `argv` always emits `prog` as argv[0]: the builder followed by a
---- `[0]` projection is the same arrow as the first projection of its
---- inputs. Quantified over the `Argv` signature so any conforming
---- backend can be checked against it.
+--- `argv` always emits `prog` as argv[0] on the `ok` path: the builder
+--- followed by an untag plus `[0]` projection is the same arrow as the
+--- first projection of its inputs. Quantified over the `Argv` signature
+--- so any conforming backend can be checked against it.
 export argv_head := (argv: Argv) ~>
   (prog, subpath, positionals, flag_specs, opts, rest) ~>
-    argv(prog, subpath, positionals, flag_specs, opts, rest)[0]
+    tag.untag(argv(prog, subpath, positionals, flag_specs, opts, rest))
+      .value[0]
   ~[2]~>
   (prog, subpath, positionals, flag_specs, opts, rest) ~> prog

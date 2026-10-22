@@ -15,51 +15,141 @@ test_sh_quote_embedded := assert m.sh_quote("it's") = "'it''\\'s'"
 
 test_sh_quote_injection := assert m.sh_quote("x; rm -rf /") = "'x; rm -rf /'"
 
-test_argv_prog_only := assert m.argv("echo", [], [], [], null, []) = ["echo"]
+test_argv_prog_only := assert tag.untag(m.argv("echo", [], [], [], null, [])).value
+  = ["echo"]
 
-test_argv_subpath := assert m.argv("gh", ["pr", "create"], [], [], null, [])
+test_argv_subpath := assert tag.untag(m.argv("gh", ["pr", "create"], [], [], null, [])).value
   = ["gh", "pr", "create"]
 
-test_argv_positionals := assert m.argv("add", [], ["a.txt", "b.txt"], [], null, [])
+test_argv_positionals := assert tag.untag(m.argv("add", [], ["a.txt", "b.txt"], [], null, [])).value
   = ["add", "a.txt", "b.txt"]
 
-test_argv_flag_on := assert m.argv("gh", [], [],
+test_argv_flag_on := assert tag.untag(m.argv("gh", [], [],
   [{ name: "verbose", flag: "--verbose", kind: "flag" }],
-  { verbose: true }, []) = ["gh", "--verbose"]
+  { verbose: true }, [])).value = ["gh", "--verbose"]
 
-test_argv_flag_off := assert m.argv("gh", [], [],
+test_argv_flag_off := assert tag.untag(m.argv("gh", [], [],
   [{ name: "verbose", flag: "--verbose", kind: "flag" }],
-  { verbose: false }, []) = ["gh"]
+  { verbose: false }, [])).value = ["gh"]
 
-test_argv_flag_absent := assert m.argv("gh", [], [],
+test_argv_flag_absent := assert tag.untag(m.argv("gh", [], [],
   [{ name: "verbose", flag: "--verbose", kind: "flag" }],
-  {}, []) = ["gh"]
+  {}, [])).value = ["gh"]
 
-test_argv_string := assert m.argv("gh", ["pr", "create"], [],
+test_argv_string := assert tag.untag(m.argv("gh", ["pr", "create"], [],
   [{ name: "title", flag: "--title", kind: "string" }],
-  { title: "hi there" }, []) = ["gh", "pr", "create", "--title", "hi there"]
+  { title: "hi there" }, [])).value
+  = ["gh", "pr", "create", "--title", "hi there"]
 
-test_argv_int := assert m.argv("tool", [], ["in"],
+test_argv_int := assert tag.untag(m.argv("tool", [], ["in"],
   [{ name: "n", flag: "-n", kind: "int" }],
-  { n: 3 }, []) = ["tool", "in", "-n", "3"]
+  { n: 3 }, [])).value = ["tool", "in", "-n", "3"]
 
-test_argv_strings := assert m.argv("tool", [], [],
+test_argv_strings := assert tag.untag(m.argv("tool", [], [],
   [{ name: "tag", flag: "-t", kind: "strings" }],
-  { tag: ["a", "b"] }, []) = ["tool", "-t", "a", "-t", "b"]
+  { tag: ["a", "b"] }, [])).value = ["tool", "-t", "a", "-t", "b"]
 
-test_argv_rest := assert m.argv("tool", [], ["f"], [], null, ["--", "x"])
+test_argv_rest := assert tag.untag(m.argv("tool", [], ["f"], [], null, ["--", "x"])).value
   = ["tool", "f", "--", "x"]
 
-test_argv_null_opts := assert m.argv("t", [], ["p"],
-  [{ name: "x", flag: "--x", kind: "string" }], null, []) = ["t", "p"]
+test_argv_null_opts := assert tag.untag(m.argv("t", [], ["p"],
+  [{ name: "x", flag: "--x", kind: "string" }], null, [])).value = ["t", "p"]
 
-test_argv_mixed := assert m.argv("gh", ["pr", "create"], ["main"],
+test_argv_mixed := assert tag.untag(m.argv("gh", ["pr", "create"], ["main"],
   [{ name: "title", flag: "--title", kind: "string" },
    { name: "draft", flag: "--draft", kind: "flag" },
    { name: "label", flag: "--label", kind: "strings" }],
-  { title: "x", draft: true, label: ["bug", "cli"] }, ["extra"])
+  { title: "x", draft: true, label: ["bug", "cli"] }, ["extra"])).value
   = ["gh", "pr", "create", "main", "--title", "x", "--draft",
      "--label", "bug", "--label", "cli", "extra"]
+
+--- check: every opts key naming a spec passes with ok(null).
+test_check_known := assert tag.tag_of(m.check(
+  [{ name: "label", flag: "--label", kind: "string" }],
+  { label: "x" })) = "ok"
+
+test_check_known_payload := assert tag.untag(m.check(
+  [{ name: "label", flag: "--label", kind: "string" }],
+  { label: "x" })).value = null
+
+--- check: null and empty opts always pass (no options supplied).
+test_check_null_opts := assert tag.tag_of(m.check(
+  [{ name: "x", flag: "--x", kind: "string" }], null)) = "ok"
+
+test_check_empty_opts := assert tag.tag_of(m.check(
+  [{ name: "x", flag: "--x", kind: "string" }], {})) = "ok"
+
+--- check: an unknown key is an err(Spawn) — EINVAL, like run's
+--- synthetic pre-spawn errors.
+test_check_unknown_tag := assert tag.tag_of(m.check(
+  [{ name: "label", flag: "--label", kind: "string" }],
+  { labl: "x" })) = "err"
+
+test_check_unknown_code := assert tag.untag(m.check(
+  [{ name: "label", flag: "--label", kind: "string" }],
+  { labl: "x" })).value.code = 22
+
+--- check: a close key earns a did-you-mean hint (labl -> label).
+test_check_unknown_suggest := assert str.contains(
+  tag.untag(m.check(
+    [{ name: "label", flag: "--label", kind: "string" }],
+    { labl: "x" })).value.message,
+  "did you mean 'label'")
+
+--- check: a prefix of a spec name is close enough to suggest.
+test_check_prefix_suggest := assert str.contains(
+  tag.untag(m.check(
+    [{ name: "label", flag: "--label", kind: "string" }],
+    { lab: "x" })).value.message,
+  "did you mean 'label'")
+
+--- check: a far key gets no hint — nothing plausible to point at.
+test_check_far_no_suggest := assert str.contains(
+  tag.untag(m.check(
+    [{ name: "label", flag: "--label", kind: "string" }],
+    { xyzzy: "x" })).value.message,
+  "did you mean") = false
+
+--- check: every unknown key is listed, each with its own hint.
+test_check_multiple_unknown := assert str.contains(
+  tag.untag(m.check(
+    [{ name: "label", flag: "--label", kind: "string" },
+     { name: "title", flag: "--title", kind: "string" }],
+    { labl: "x", tytle: "y" })).value.message,
+  "'labl'")
+
+test_check_multiple_unknown_hint := assert str.contains(
+  tag.untag(m.check(
+    [{ name: "label", flag: "--label", kind: "string" },
+     { name: "title", flag: "--title", kind: "string" }],
+    { labl: "x", tytle: "y" })).value.message,
+  "did you mean 'title'")
+
+--- argv: an unknown opts key fails the whole call — no plausible-but-
+--- wrong argv comes out (the hallucinated-flag case).
+test_argv_unknown_key := assert tag.tag_of(m.argv("gh", [], [],
+  [{ name: "label", flag: "--label", kind: "string" }],
+  { labl: "x" }, [])) = "err"
+
+test_argv_unknown_message := assert str.contains(
+  tag.untag(m.argv("gh", [], [],
+    [{ name: "label", flag: "--label", kind: "string" }],
+    { labl: "x" }, [])).value.message,
+  "unknown option 'labl'")
+
+--- run: a literal list still spawns; the argv Result composes — the
+--- generated-adapter `run(argv(...))` shape propagates a validation
+--- err as run's own spawn-style error with no unwrap glue.
+test_run_argv_ok := assert tag.untag(m.run(m.argv("echo", [], [],
+  [], null, []))).value.stdout = "\n"
+
+test_run_argv_err := assert tag.tag_of(m.run(m.argv("gh", [], [],
+  [{ name: "label", flag: "--label", kind: "string" }],
+  { labl: "x" }, []))) = "err"
+
+test_run_argv_err_code := assert tag.untag(m.run(m.argv("gh", [], [],
+  [{ name: "label", flag: "--label", kind: "string" }],
+  { labl: "x" }, []))).value.code = 22
 
 --- spawn: `echo` exits 0 and stdout is captured.
 test_run_echo := assert tag.untag(m.run(["echo", "hi"])).value.stdout = "hi\n"
