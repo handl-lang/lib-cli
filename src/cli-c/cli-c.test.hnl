@@ -5,6 +5,12 @@
 
 from "./index" import * as m
 
+
+-- res_tag -- the `tag.tag_of` replacement for `ok`/`err` results
+-- (phase-3 WS-F nominal migration): dispatch is ctor-sym identity via
+-- `match` -- the `err`/`ok` arms cover both the canonical `__ctor__`
+-- mint and the host-minted `{"__tag__": ...}` envelope.
+res_tag :: r ~> match r { ok(_): "ok", err(_): "err", _: "?" }
 test_sh_quote_plain := assert m.sh_quote("abc") = "'abc'"
 
 test_sh_quote_empty := assert m.sh_quote("") = "''"
@@ -15,206 +21,206 @@ test_sh_quote_embedded := assert m.sh_quote("it's") = "'it''\\'s'"
 
 test_sh_quote_injection := assert m.sh_quote("x; rm -rf /") = "'x; rm -rf /'"
 
-test_argv_prog_only := assert tag.untag(m.argv("echo", [], [], [], null, [])).value
+test_argv_prog_only := assert m.argv("echo", [], [], [], null, []).value
   = ["echo"]
 
-test_argv_subpath := assert tag.untag(m.argv("gh", ["pr", "create"], [], [], null, [])).value
+test_argv_subpath := assert m.argv("gh", ["pr", "create"], [], [], null, []).value
   = ["gh", "pr", "create"]
 
-test_argv_positionals := assert tag.untag(m.argv("add", [], ["a.txt", "b.txt"], [], null, [])).value
+test_argv_positionals := assert m.argv("add", [], ["a.txt", "b.txt"], [], null, []).value
   = ["add", "a.txt", "b.txt"]
 
-test_argv_flag_on := assert tag.untag(m.argv("gh", [], [],
+test_argv_flag_on := assert m.argv("gh", [], [],
   [{ name: "verbose", flag: "--verbose", kind: "flag" }],
-  { verbose: true }, [])).value = ["gh", "--verbose"]
+  { verbose: true }, []).value = ["gh", "--verbose"]
 
-test_argv_flag_off := assert tag.untag(m.argv("gh", [], [],
+test_argv_flag_off := assert m.argv("gh", [], [],
   [{ name: "verbose", flag: "--verbose", kind: "flag" }],
-  { verbose: false }, [])).value = ["gh"]
+  { verbose: false }, []).value = ["gh"]
 
-test_argv_flag_absent := assert tag.untag(m.argv("gh", [], [],
+test_argv_flag_absent := assert m.argv("gh", [], [],
   [{ name: "verbose", flag: "--verbose", kind: "flag" }],
-  {}, [])).value = ["gh"]
+  {}, []).value = ["gh"]
 
-test_argv_string := assert tag.untag(m.argv("gh", ["pr", "create"], [],
+test_argv_string := assert m.argv("gh", ["pr", "create"], [],
   [{ name: "title", flag: "--title", kind: "string" }],
-  { title: "hi there" }, [])).value
+  { title: "hi there" }, []).value
   = ["gh", "pr", "create", "--title", "hi there"]
 
-test_argv_int := assert tag.untag(m.argv("tool", [], ["in"],
+test_argv_int := assert m.argv("tool", [], ["in"],
   [{ name: "n", flag: "-n", kind: "int" }],
-  { n: 3 }, [])).value = ["tool", "in", "-n", "3"]
+  { n: 3 }, []).value = ["tool", "in", "-n", "3"]
 
-test_argv_strings := assert tag.untag(m.argv("tool", [], [],
+test_argv_strings := assert m.argv("tool", [], [],
   [{ name: "tag", flag: "-t", kind: "strings" }],
-  { tag: ["a", "b"] }, [])).value = ["tool", "-t", "a", "-t", "b"]
+  { tag: ["a", "b"] }, []).value = ["tool", "-t", "a", "-t", "b"]
 
-test_argv_rest := assert tag.untag(m.argv("tool", [], ["f"], [], null, ["--", "x"])).value
+test_argv_rest := assert m.argv("tool", [], ["f"], [], null, ["--", "x"]).value
   = ["tool", "f", "--", "x"]
 
-test_argv_null_opts := assert tag.untag(m.argv("t", [], ["p"],
-  [{ name: "x", flag: "--x", kind: "string" }], null, [])).value = ["t", "p"]
+test_argv_null_opts := assert m.argv("t", [], ["p"],
+  [{ name: "x", flag: "--x", kind: "string" }], null, []).value = ["t", "p"]
 
-test_argv_mixed := assert tag.untag(m.argv("gh", ["pr", "create"], ["main"],
+test_argv_mixed := assert m.argv("gh", ["pr", "create"], ["main"],
   [{ name: "title", flag: "--title", kind: "string" },
    { name: "draft", flag: "--draft", kind: "flag" },
    { name: "label", flag: "--label", kind: "strings" }],
-  { title: "x", draft: true, label: ["bug", "cli"] }, ["extra"])).value
+  { title: "x", draft: true, label: ["bug", "cli"] }, ["extra"]).value
   = ["gh", "pr", "create", "main", "--title", "x", "--draft",
      "--label", "bug", "--label", "cli", "extra"]
 
 --- doc: the spec's `doc` string rides along unnoticed — argv ignores it,
 --- so a spec with `doc` set emits the same words as one without.
-test_argv_doc_set := assert tag.untag(m.argv("gh", ["pr", "create"], [],
+test_argv_doc_set := assert m.argv("gh", ["pr", "create"], [],
   [{ name: "title", flag: "--title", kind: "string",
      doc: "Title for the pull request" }],
-  { title: "x" }, [])).value
+  { title: "x" }, []).value
   = ["gh", "pr", "create", "--title", "x"]
 
 --- doc: an explicitly empty doc behaves the same.
-test_argv_doc_empty := assert tag.untag(m.argv("gh", [], [],
+test_argv_doc_empty := assert m.argv("gh", [], [],
   [{ name: "title", flag: "--title", kind: "string", doc: "" }],
-  { title: "x" }, [])).value = ["gh", "--title", "x"]
+  { title: "x" }, []).value = ["gh", "--title", "x"]
 
 --- doc: an absent doc behaves the same (record literals may omit keys).
-test_argv_doc_absent := assert tag.untag(m.argv("gh", [], [],
+test_argv_doc_absent := assert m.argv("gh", [], [],
   [{ name: "title", flag: "--title", kind: "string" }],
-  { title: "x" }, [])).value = ["gh", "--title", "x"]
+  { title: "x" }, []).value = ["gh", "--title", "x"]
 
 --- check: every opts key naming a spec passes with ok(null).
-test_check_known := assert tag.tag_of(m.check(
+test_check_known := assert res_tag(m.check(
   [{ name: "label", flag: "--label", kind: "string" }],
   { label: "x" })) = "ok"
 
-test_check_known_payload := assert tag.untag(m.check(
+test_check_known_payload := assert m.check(
   [{ name: "label", flag: "--label", kind: "string" }],
-  { label: "x" })).value = null
+  { label: "x" }).value = null
 
 --- check: null and empty opts always pass (no options supplied).
-test_check_null_opts := assert tag.tag_of(m.check(
+test_check_null_opts := assert res_tag(m.check(
   [{ name: "x", flag: "--x", kind: "string" }], null)) = "ok"
 
-test_check_empty_opts := assert tag.tag_of(m.check(
+test_check_empty_opts := assert res_tag(m.check(
   [{ name: "x", flag: "--x", kind: "string" }], {})) = "ok"
 
 --- check: an unknown key is an err(Spawn) — EINVAL, like run's
 --- synthetic pre-spawn errors.
-test_check_unknown_tag := assert tag.tag_of(m.check(
+test_check_unknown_tag := assert res_tag(m.check(
   [{ name: "label", flag: "--label", kind: "string" }],
   { labl: "x" })) = "err"
 
-test_check_unknown_code := assert tag.untag(m.check(
+test_check_unknown_code := assert m.check(
   [{ name: "label", flag: "--label", kind: "string" }],
-  { labl: "x" })).value.code = 22
+  { labl: "x" }).value.code = 22
 
 --- check: a close key earns a did-you-mean hint (labl -> label).
 test_check_unknown_suggest := assert str.contains(
-  tag.untag(m.check(
+  m.check(
     [{ name: "label", flag: "--label", kind: "string" }],
-    { labl: "x" })).value.message,
+    { labl: "x" }).value.message,
   "did you mean 'label'")
 
 --- check: a prefix of a spec name is close enough to suggest.
 test_check_prefix_suggest := assert str.contains(
-  tag.untag(m.check(
+  m.check(
     [{ name: "label", flag: "--label", kind: "string" }],
-    { lab: "x" })).value.message,
+    { lab: "x" }).value.message,
   "did you mean 'label'")
 
 --- check: a far key gets no hint — nothing plausible to point at.
 test_check_far_no_suggest := assert str.contains(
-  tag.untag(m.check(
+  m.check(
     [{ name: "label", flag: "--label", kind: "string" }],
-    { xyzzy: "x" })).value.message,
+    { xyzzy: "x" }).value.message,
   "did you mean") = false
 
 --- check: every unknown key is listed, each with its own hint.
 test_check_multiple_unknown := assert str.contains(
-  tag.untag(m.check(
+  m.check(
     [{ name: "label", flag: "--label", kind: "string" },
      { name: "title", flag: "--title", kind: "string" }],
-    { labl: "x", tytle: "y" })).value.message,
+    { labl: "x", tytle: "y" }).value.message,
   "'labl'")
 
 test_check_multiple_unknown_hint := assert str.contains(
-  tag.untag(m.check(
+  m.check(
     [{ name: "label", flag: "--label", kind: "string" },
      { name: "title", flag: "--title", kind: "string" }],
-    { labl: "x", tytle: "y" })).value.message,
+    { labl: "x", tytle: "y" }).value.message,
   "did you mean 'title'")
 
 --- doc: check ignores `doc` too — a known key passes and an unknown one
 --- errs identically whether or not the spec carries a doc string.
-test_check_doc_set := assert tag.tag_of(m.check(
+test_check_doc_set := assert res_tag(m.check(
   [{ name: "label", flag: "--label", kind: "string",
      doc: "Add a label" }],
   { label: "x" })) = "ok"
 
-test_check_doc_set_unknown := assert tag.untag(m.check(
+test_check_doc_set_unknown := assert m.check(
   [{ name: "label", flag: "--label", kind: "string",
      doc: "Add a label" }],
-  { labl: "x" })).value.code = 22
+  { labl: "x" }).value.code = 22
 
 --- argv: an unknown opts key fails the whole call — no plausible-but-
 --- wrong argv comes out (the hallucinated-flag case).
-test_argv_unknown_key := assert tag.tag_of(m.argv("gh", [], [],
+test_argv_unknown_key := assert res_tag(m.argv("gh", [], [],
   [{ name: "label", flag: "--label", kind: "string" }],
   { labl: "x" }, [])) = "err"
 
 test_argv_unknown_message := assert str.contains(
-  tag.untag(m.argv("gh", [], [],
+  m.argv("gh", [], [],
     [{ name: "label", flag: "--label", kind: "string" }],
-    { labl: "x" }, [])).value.message,
+    { labl: "x" }, []).value.message,
   "unknown option 'labl'")
 
 --- run: a literal list still spawns; the argv Result composes — the
 --- generated-adapter `run(argv(...))` shape propagates a validation
 --- err as run's own spawn-style error with no unwrap glue.
-test_run_argv_ok := assert tag.untag(m.run(m.argv("echo", [], [],
-  [], null, []))).value.stdout = "\n"
+test_run_argv_ok := assert m.run(m.argv("echo", [], [],
+  [], null, [])).value.stdout = "\n"
 
-test_run_argv_err := assert tag.tag_of(m.run(m.argv("gh", [], [],
+test_run_argv_err := assert res_tag(m.run(m.argv("gh", [], [],
   [{ name: "label", flag: "--label", kind: "string" }],
   { labl: "x" }, []))) = "err"
 
-test_run_argv_err_code := assert tag.untag(m.run(m.argv("gh", [], [],
+test_run_argv_err_code := assert m.run(m.argv("gh", [], [],
   [{ name: "label", flag: "--label", kind: "string" }],
-  { labl: "x" }, []))).value.code = 22
+  { labl: "x" }, [])).value.code = 22
 
 --- spawn: `echo` exits 0 and stdout is captured.
-test_run_echo := assert tag.untag(m.run(["echo", "hi"])).value.stdout = "hi\n"
+test_run_echo := assert m.run(["echo", "hi"]).value.stdout = "hi\n"
 
-test_run_echo_code := assert tag.untag(m.run(["echo", "hi"])).value.code = 0
+test_run_echo_code := assert m.run(["echo", "hi"]).value.code = 0
 
 --- spawn: the child's exit status passes through (sh exits 3).
-test_run_code := assert tag.untag(m.run(["sh", "-c", "exit 3"])).value.code = 3
+test_run_code := assert m.run(["sh", "-c", "exit 3"]).value.code = 3
 
 --- spawn: stdout and stderr are separate pipes.
-test_run_stderr := assert tag.untag(m.run(["sh", "-c", "echo o; echo e >&2"])).value.stderr = "e\n"
+test_run_stderr := assert m.run(["sh", "-c", "echo o; echo e >&2"]).value.stderr = "e\n"
 
-test_run_stdout := assert tag.untag(m.run(["sh", "-c", "echo o; echo e >&2"])).value.stdout = "o\n"
+test_run_stdout := assert m.run(["sh", "-c", "echo o; echo e >&2"]).value.stdout = "o\n"
 
 --- spawn: argv goes verbatim — spaces stay inside one word, and shell
 --- metacharacters are literal (no `sh` parses the argv).
-test_run_word := assert tag.untag(m.run(["echo", "a b"])).value.stdout = "a b\n"
+test_run_word := assert m.run(["echo", "a b"]).value.stdout = "a b\n"
 
-test_run_metachars := assert tag.untag(m.run(["echo", "a; b | c > d"])).value.stdout
+test_run_metachars := assert m.run(["echo", "a; b | c > d"]).value.stdout
   = "a; b | c > d\n"
 
 --- spawn: a missing program is a spawn error — posix_spawnp reports the
 --- ENOENT (2) itself now that no shell stands in between.
-test_run_missing := assert tag.tag_of(m.run(["no-such-command-xyzzy"])) = "err"
+test_run_missing := assert res_tag(m.run(["no-such-command-xyzzy"])) = "err"
 
-test_run_missing_code := assert tag.untag(m.run(["no-such-command-xyzzy"])).value.code = 2
+test_run_missing_code := assert m.run(["no-such-command-xyzzy"]).value.code = 2
 
 --- spawn: stdout larger than the 64 KiB pipe buffer — the poll drain
 --- must keep pulling while the child is still writing.
-test_run_big := assert str.length(tag.untag(m.run(["sh", "-c", "head -c 100000 /dev/zero | tr '\\0' 'x'"])).value.stdout)
+test_run_big := assert str.length(m.run(["sh", "-c", "head -c 100000 /dev/zero | tr '\\0' 'x'"]).value.stdout)
   = 100000
 
 --- spawn: empty argv is an `err(Spawn)` — EINVAL, no process ran.
-test_run_empty := assert tag.tag_of(m.run([])) = "err"
+test_run_empty := assert res_tag(m.run([])) = "err"
 
 --- shell: a raw pipeline line runs verbatim under `sh -c`.
-test_shell_pipe := assert tag.untag(m.shell("echo ab | tr ab AB")).value.stdout
+test_shell_pipe := assert m.shell("echo ab | tr ab AB").value.stdout
   = "AB\n"

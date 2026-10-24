@@ -49,8 +49,8 @@
 ---   from "str-handl" import { lines }     -- str-handl: String ~> [String]
 ---
 ---   r := gh_config_list()                  -- adapter call → ok Output
----   v := parse(tag.untag(r).value.stdout)  -- --json stdout → Value
----   ls := lines(tag.untag(r).value.stdout) -- line-oriented stdout
+---   v := parse(r.value.stdout)  -- --json stdout → Value
+---   ls := lines(r.value.stdout) -- line-oriented stdout
 ---
 --- `parse` is lenient, not validating: empty/garbage/unclosed input
 --- returns `null`, and junk trailing a complete value yields `null`
@@ -150,6 +150,6 @@ export Shell := (String) ~[1]~> Result<Output, Spawn>
 --- so any conforming backend can be checked against it.
 export argv_head := (argv: Argv) ~>
   (prog, subpath, positionals, flag_specs, opts, rest) ~>
-    tag.untag(argv(prog, subpath, positionals, flag_specs, opts, rest)).value[0]
+    argv(prog, subpath, positionals, flag_specs, opts, rest).value[0]
   ~[2]~>
   (prog, subpath, positionals, flag_specs, opts, rest) ~> prog

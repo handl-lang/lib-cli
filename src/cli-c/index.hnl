@@ -205,10 +205,9 @@ export check := (flag_specs, opts) ~> do {
 --- typo'd option can never produce a plausible-looking argv.
 export argv := (prog, subpath, positionals, flag_specs, opts, rest) ~> do {
   c := check(flag_specs, opts)
-  if tag.tag_of(c) == "err" {
-    c
-  } else {
-    do {
+  match c {
+    err(_): c,
+    _: do {
       out := [to_str(prog)]
       for s in subpath { do {
         out := [...out, to_str(s)]
@@ -226,6 +225,12 @@ export argv := (prog, subpath, positionals, flag_specs, opts, rest) ~> do {
     }
   }
 }
+
+--- `cli.is_err` — ctor-sym dispatch on a `Result`: true on `err`,
+--- covering both the canonical `__ctor__` mint and the host-minted
+--- `{"__tag__": "err"}` envelope (phase-3 WS-F; the `err` arm's
+--- `tag_pred ∨ ctor_name` discriminant accepts either shape).
+export is_err := (r) ~> match r { err(_): true, _: false }
 
 --- little-endian i32 at byte offset `off` of a Bytes buffer — the fd
 --- pair `pipe2` writes into its out buffer (ints are little-endian on
@@ -514,15 +519,14 @@ spawn_capture := (av) ~> do {
 --- own spawn-style error with no adapter change), an `ok` payload is
 --- unwrapped and spawned.
 export run := (av) ~> do {
-  t := tag.tag_of(av)
-  if t == "err" {
-    av
-  } else {
-    v := if t == "ok" { tag.untag(av).value } else { av }
-    match v {
-      []: err({ code: EINVAL, message: "cli-c: run: empty argv" }),
-      _: spawn_capture(v)
-    }
+  run_argv := (v) ~> match v {
+    []: err({ code: EINVAL, message: "cli-c: run: empty argv" }),
+    _: spawn_capture(v)
+  }
+  match av {
+    err(_): av,
+    ok(v): run_argv(v),
+    _: run_argv(av)
   }
 }
 
