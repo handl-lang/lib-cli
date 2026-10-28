@@ -113,3 +113,7 @@ HNL=../host-cli/target/debug/hnl scripts/hnl-gate.sh
 
 `cargo check`/`cargo test` cover only the const crate that exports the
 sources to the Rust side (`src/lib.rs`).
+
+## License
+
+MIT.
