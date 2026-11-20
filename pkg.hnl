@@ -1,3 +1,10 @@
 -- lib-cli: modules this package provides (entry defaults to
 -- src/index.hnl; N modules resolve to src/<name>/index.hnl).
-{ modules: ["cli", "cli-c"] }
+{
+  modules: ["cli", "cli-c"],
+  name: "cli",
+  description: "Child-process spawn contract (cli port) plus its libc backend (cli-c).",
+  license: "MIT",
+  keywords: ["cli", "process", "spawn", "posix"],
+  homepage: "https://github.com/handl-lang/lib-cli",
+}

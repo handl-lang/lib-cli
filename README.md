@@ -4,8 +4,6 @@
 `cli-c`, its libc backend. One repo ships both modules
 (`modules: ["cli", "cli-c"]` in `pkg.hnl` → `src/<name>/index.hnl`).
 
-Part of the `handl-lang` org split (ADR-0128).
-
 ## The two modules
 
 - **`cli` (port)** — the contract: `Output`/`Spawn`/`FlagSpec` record
