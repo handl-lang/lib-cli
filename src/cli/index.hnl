@@ -84,7 +84,7 @@ export Spawn := { code: Int, message: String }
 ---   "strings" -- value is a list; emits `flag <v>` once per element
 ---
 --- The `kind` spellings match the `opt:<kind>:<name>:<flag>` arg
---- descriptors the sdkgen-cli emitter produces (`opt:string:title:--title`
+--- descriptors the `cli` codegen emitter produces (`opt:string:title:--title`
 --- lowers to `{ name: "title", flag: "--title", kind: "string", doc: "" }` —
 --- the descriptor's optional trailing `:doc` component, empty when the
 --- probe learned no description).

@@ -12,7 +12,7 @@
   stdout/stderr/exit code into `ok Output`; spawn-time failures are
   `err Spawn { code: errno, message }`. `argv(prog, subpath, positionals,
   flag_specs, opts, rest)` is the pure command-line builder the
-  sdkgen-cli emitter targets (`opt:<kind>:<name>:<flag>` descriptors
+  the `cli` codegen emitter targets (`opt:<kind>:<name>:<flag>` descriptors
   lower to `FlagSpec`s); `sh_quote` is the POSIX single-quote escaper;
   `shell(cmdline)` runs a caller-trusted raw `sh -c` line.
 - **`cli-c` (backend)** — implements the port directly on
