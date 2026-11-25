@@ -151,5 +151,5 @@ export Shell := (String) ~>[1] Result<Output, Spawn>
 export argv_head := (argv: Argv) ~>
   (prog, subpath, positionals, flag_specs, opts, rest) ~>
     argv(prog, subpath, positionals, flag_specs, opts, rest).value[0]
-  ~[2]~>
+  ~>[2]
   (prog, subpath, positionals, flag_specs, opts, rest) ~> prog
