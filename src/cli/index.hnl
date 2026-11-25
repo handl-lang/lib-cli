@@ -107,7 +107,7 @@ export FlagSpec := { name: String, flag: String, kind: String, doc: String }
 --- `Result<[String], Spawn>` `argv` returns: an `err` short-circuits to
 --- `err(Spawn)` with no spawn attempted, an `ok` payload is spawned as
 --- the literal argv.
-export Run := ([String]) ~[1]~> Result<Output, Spawn>
+export Run := ([String]) ~>[1] Result<Output, Spawn>
 
 --- Pure option validation: `check(flag_specs, opts)` returns
 --- `ok(null)` when every key in `opts` names a spec in `flag_specs`
@@ -142,7 +142,7 @@ export ShQuote := (String) ~> String
 --- Run a raw `sh -c` command line — no quoting, full shell syntax
 --- (pipes, redirections, `&&`). The input is caller-trusted: never pass
 --- untrusted text (use `run` + `argv`/`sh_quote` for that).
-export Shell := (String) ~[1]~> Result<Output, Spawn>
+export Shell := (String) ~>[1] Result<Output, Spawn>
 
 --- `argv` always emits `prog` as argv[0] on the `ok` path: the builder
 --- followed by an untag plus `[0]` projection is the same arrow as the
